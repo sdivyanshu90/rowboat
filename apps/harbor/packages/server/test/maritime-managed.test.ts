@@ -426,13 +426,14 @@ describe('managed Maritime agents', () => {
     expect(fake.env.get(vm)!.get('OPENAI_API_KEY')).toEqual({ value: 'disabled-by-rowboat-owner-key', isSecret: true });
     expect(fake.env.get(vm)!.get('ROWBOAT_LLM_PROVIDER')?.value).toBe('chatgpt');
     expect(fake.spend.get(vm)?.limit).toBeNull();
-    expect(execs().at(-1)).toContain("sed -i '/^model_provider = /d'");
+    expect(execs().at(-1)).toContain("sed -i '/^model_provider = /d; /^model = /d'");
     expect((await org.listing(agent.id))?.hosting?.llm?.provider).toBe('chatgpt');
-    // Asked again: already on it, nothing re-done.
+    // Asked again: already on it in the record, but the VM is set up again, so a later fix to the setup reaches it.
     const before = fake.received.length;
     expect((await me.post(`/v1/agents/${agent.id}/hosting/sign-in`)).body).toMatchObject({ signedIn: true, hosting: { llm: { provider: 'chatgpt' } } });
-    expect(execs().at(-1)).toContain('codex login status');
-    expect(fake.received.slice(before).filter((x) => x.method === 'PUT' && /llm-spend-limit|\/env\//.test(x.path))).toHaveLength(0);
+    expect(execs().slice(-2)[0]).toContain('codex login status');
+    expect(execs().at(-1)).toContain("sed -i '/^model_provider = /d; /^model = /d'");
+    expect(fake.received.slice(before).filter((x) => x.method === 'PUT' && /llm-spend-limit/.test(x.path))).toHaveLength(1);
     // A turn: the script asks Codex itself and, signed in, forces Codex's own provider; the trial check is behind it.
     fake.nextTurn = codexTurn('On my plan.', { stderr: 'rowboat-sign-in: chatgpt\n' });
     const { invocations } = await org.post(`${mention(agent)} hi`);

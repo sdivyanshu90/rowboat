@@ -4,7 +4,7 @@ import type { ConnectorEnv, RunningConnector } from '../platforms.js';
 import { quietly, requestPrompt, sleep } from '../common/request.js';
 import { MaritimeError, type Execution, type MaritimeApi } from './api.js';
 import { SIGN_IN_GONE_MESSAGE, trialOverMessage } from '../../core/hosting.js';
-import { RUNTIMES, type Runtime, type TurnReading } from './runtimes.js';
+import { RUNTIMES, type ModelChoice, type Runtime, type TurnReading } from './runtimes.js';
 
 // The Maritime connector (spec §8 Connectors, Maritime, 2026-10-26): one per
 // agent whose connection is `maritime`, run by Harbor (connectors/host.ts),
@@ -71,6 +71,9 @@ export class MaritimeConnector implements RunningConnector {
   private stopped = false;
   private readonly stopping = new AbortController();
   private declared = '';
+  /** The harness's own model list, as the last turn left it on the VM (runtimes.ts `modelsPath`): the composer's Model option. */
+  private models: ModelChoice[] = [];
+  private modelsText = '';
 
   constructor(
     private readonly env: ConnectorEnv,
@@ -105,6 +108,10 @@ export class MaritimeConnector implements RunningConnector {
   // --- intake -------------------------------------------------------------------------
 
   private async boot(): Promise<void> {
+    // The list declared before a restart stands until the next turn reads the harness's file: nothing here wakes the VM.
+    const earlier = await this.safe(() => this.env.service.getAgentCapabilities(this.env.agent.id), undefined);
+    const model = earlier?.options.find((o) => o.key === 'model');
+    if (model?.type === 'select') this.models = model.choices.map((c) => ({ id: c.id, label: c.label }));
     await this.declare();
     for (const invocation of await this.safe(() => this.env.service.listAgentInvocations(this.env.ctx), [])) {
       if (invocation.state === 'working' && !this.takenOn.has(invocation.id)) {
@@ -369,6 +376,18 @@ export class MaritimeConnector implements RunningConnector {
       }
     }
     await this.save(spaceId, threadRootId, { ...next, ...(posted ? { deliveredOffset: posted.offset } : {}), turn: undefined });
+    await this.refreshModels();
+  }
+
+  /** After a turn: the harness's own model list, as the turn script left it on the VM; a changed list is declared. */
+  private async refreshModels(): Promise<void> {
+    const text = await this.safe(async () => (await this.api()).readFile(this.maritimeAgentId, this.runtime.modelsPath), undefined);
+    if (!text || text === this.modelsText) return;
+    this.modelsText = text;
+    const models = this.runtime.models(text);
+    if (models.length === 0) return;
+    this.models = models;
+    await this.declare();
   }
 
   private async cancelled(invocation: Invocation, record?: ThreadRecord): Promise<void> {
@@ -417,7 +436,7 @@ export class MaritimeConnector implements RunningConnector {
   // --- what the connector tells Harbor --------------------------------------------------------
 
   private async declare(): Promise<void> {
-    const capabilities: ConnectorCapabilities = { stop: true, options: this.runtime.options };
+    const capabilities: ConnectorCapabilities = { stop: true, options: this.runtime.options(this.models) };
     const signature = JSON.stringify(capabilities);
     if (signature === this.declared) return;
     this.declared = signature;
