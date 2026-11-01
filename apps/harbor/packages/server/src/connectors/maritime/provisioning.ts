@@ -29,12 +29,14 @@ export const LLM_SETUP: Record<'openai' | 'anthropic' | 'openrouter', { keyVar: 
 export const PROXY_TOKEN_DUD = 'disabled-by-rowboat-owner-key';
 
 // Codex's sign-in (2026-10-30), kept by the template under /data/.codex: Codex's own word on whether one is there, and
-// the line in the template's config that sends a signed-in Codex to the platform's proxy anyway. The template writes
-// that line when no sign-in was there at boot and leaves it out when one was (its server.js, read 2026-10-30), so
-// dropping it is what the template's next boot would do; the marker on the first line stays, so that boot still writes.
+// the two lines in the template's config that would send a signed-in Codex to the platform's proxy anyway, or ask the
+// ChatGPT backend for a model it does not serve (seen 2026-10-30: "The 'gpt-5.5' model is not supported when using
+// Codex with a ChatGPT account"). The template writes the provider line when no sign-in was there at boot and leaves
+// it out when one was (its server.js, read 2026-10-30), so dropping it is what the template's next boot would do; the
+// model line goes with it, so Codex falls to its own default for the account. The marker on the first line stays.
 const CODEX_SIGN_IN_STATUS = 'CODEX_HOME=/data/.codex codex login status 2>&1';
 const CODEX_SIGNED_IN = /Logged in using ChatGPT/;
-const CODEX_CONFIG_OWN_PROVIDER = `f=/data/.codex/config.toml; if [ -f "$f" ] && head -n 1 "$f" | grep -q 'managed-by: maritime'; then sed -i '/^model_provider = /d' "$f"; fi; true`;
+const CODEX_CONFIG_OWN_PROVIDER = `f=/data/.codex/config.toml; if [ -f "$f" ] && head -n 1 "$f" | grep -q 'managed-by: maritime'; then sed -i '/^model_provider = /d; /^model = /d' "$f"; fi; true`;
 const CODEX_SIGN_OUT = 'CODEX_HOME=/data/.codex codex logout 2>&1; true';
 /** A sign-in command is a process on the VM, not a model call: seconds, more when the VM has to wake first. */
 const SIGN_IN_TIMEOUT_S = 60;

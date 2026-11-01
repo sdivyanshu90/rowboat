@@ -457,7 +457,7 @@ export class Hosting {
     } finally {
       if (held && !found) await this.platform(() => ops.stopFunding()).catch(() => undefined);
     }
-    const next = await this.recordSignIn(row, ops, ctx.memberId, found);
+    const next = await this.recordSignIn(row, ops, ctx.memberId, found, true);
     return { hosting: publicShape(next), signedIn: found !== undefined };
   }
 
@@ -480,12 +480,18 @@ export class Hosting {
     return found ? 'adopted' : 'dropped';
   }
 
-  /** The record after what the VM said: on the sign-in from now (the platform set up for it first), or no longer on it; untouched when it already said so. */
-  private async recordSignIn(row: StoredAgentHosting, ops: HostingOps, by: string, found: 'chatgpt' | undefined): Promise<StoredAgentHosting> {
+  /**
+   * The record after what the VM said: on the sign-in from now (the platform set up for it first), or no longer on
+   * it; untouched when it already said so, except that an outright ask (`reapply`) sets the VM up again, so a later
+   * fix to that setup (the model line, 2026-11-01) reaches an agent signed in before it.
+   */
+  private async recordSignIn(row: StoredAgentHosting, ops: HostingOps, by: string, found: 'chatgpt' | undefined, reapply = false): Promise<StoredAgentHosting> {
     const at = this.k.now();
     if (found) {
-      if (row.funding === 'own' && row.llm?.provider === found) return row;
+      const already = row.funding === 'own' && row.llm?.provider === found;
+      if (already && !reapply) return row;
       await this.platform(() => ops.useSignIn({ kind: row.kind }));
+      if (already) return row;
       const next: StoredAgentHosting = {
         ...row,
         funding: 'own',

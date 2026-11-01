@@ -266,6 +266,19 @@ describe('the Maritime connector with the coding agents', () => {
     fake.agent = { ...fake.agent, framework: 'custom', templateId: 'codex', status: 'sleeping' };
     const codex = await org.agent('Codex', 'codex');
     const reports = vi.spyOn(org.harbor.service, 'updateInvocation');
+    // Models come from the harness (2026-11-01): nothing is listed before a turn, Effort only; the turn leaves Codex's own catalog on the VM.
+    await vi.waitFor(async () => expect((await org.harbor.service.getAgentCapabilities(codex.id)).options.map((o) => o.key)).toEqual(['effort']));
+    fake.files.set(
+      '/data/rowboat/models.json',
+      JSON.stringify({
+        fetched_at: 1,
+        models: [
+          { slug: 'gpt-6-sol', display_name: 'GPT-6-Sol', visibility: 'list', priority: 4 },
+          { slug: 'gpt-6.1-sol', display_name: 'GPT-6.1-Sol', visibility: 'list', priority: 1 },
+          { slug: 'gpt-reserve', display_name: 'GPT-Reserve', visibility: 'hide', priority: 2 },
+        ],
+      }),
+    );
     fake.nextTurn = codexTurn('Tests pass.', { thread: '01a1-thread' });
     const { message, invocations } = await org.post(`${mention(codex)} run the tests`);
     expect((await org.ended(invocations[0]!.id)).state).toBe('done');
@@ -274,6 +287,14 @@ describe('the Maritime connector with the coding agents', () => {
     expect(first).toContain(`-c 'mcp_servers.rowboat.url="http://localhost:`);
     expect(first).toContain(`-c 'mcp_servers.rowboat.bearer_token_env_var="ROWBOAT_AGENT_KEY"'`);
     expect(first).toContain('export CODEX_HOME=/data/.codex');
+    expect(first).toContain('cp "$CODEX_HOME/models_cache.json" /data/rowboat/models.json');
+    // The catalog the turn left is the composer's Model option from then on: listed models by priority, hidden ones out.
+    await vi.waitFor(async () =>
+      expect((await org.harbor.service.getAgentCapabilities(codex.id)).options).toEqual([
+        { type: 'select', key: 'model', label: 'Model', choices: [{ id: 'gpt-6.1-sol', label: 'GPT-6.1-Sol' }, { id: 'gpt-6-sol', label: 'GPT-6-Sol' }] },
+        { type: 'select', key: 'effort', label: 'Effort', choices: [{ id: 'low', label: 'Low' }, { id: 'medium', label: 'Medium' }, { id: 'high', label: 'High' }] },
+      ]),
+    );
     expect(fake.submits().at(-1)!.files.prompt).toBe(`/data/rowboat/${invocations[0]!.id}.prompt`);
     expect((await org.thread(message.id)).find((m) => m.author.memberId === codex.id)!.body).toBe('Tests pass.');
     expect(reports.mock.calls.map(([, , u]) => ('activity' in u ? u.activity : undefined))).toContain('is running `npm test`');

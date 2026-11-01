@@ -51,19 +51,57 @@ export interface Runtime {
   read(out: string, last: string | undefined, err: string | undefined, exitCode: number | null | undefined): TurnReading;
   /** What the newest events show the agent doing, if anything. */
   activity(out: string): string | undefined;
-  options: InvocationOption[];
+  /** The composer's options: the runtime's own (Effort), and Model from the list the harness left on the VM, when there is a choice. */
+  options(models: ModelChoice[]): InvocationOption[];
+  /** Where the turn script leaves the harness's own model list, as the harness or its provider wrote it. */
+  modelsPath: string;
+  /** That file read into choices; nothing when it is not one. */
+  models(text: string): ModelChoice[];
+}
+
+/** One model the harness offers, as the composer shows it. */
+export interface ModelChoice {
+  id: string;
+  label: string;
+}
+
+// Models are never listed in Harbor (2026-11-01): the ChatGPT backend, the API, Rowboat's proxy and each owner's
+// provider all serve different sets, and they change on their own schedule. Each turn leaves the harness's own
+// list on the VM (Codex's catalog file, Hermes's provider catalog, Anthropic's models endpoint for Claude Code),
+// the connector reads it after the turn and declares it, and the composer shows "default" until someone picks.
+
+/** The Model option only when there is a choice to make (as local agents do, local-agents.ts), at most what the protocol takes. */
+function modelOption(models: ModelChoice[]): InvocationOption[] {
+  const usable = models.filter((m) => m.id.length > 0 && m.id.length <= 256).slice(0, 100);
+  if (usable.length < 2) return [];
+  return [{ type: 'select', key: 'model', label: 'Model', choices: usable.map((m) => ({ id: m.id, label: clip(m.label || m.id, 128) })) }];
+}
+const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
+/** A JSON document, or nothing. */
+function parse(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
 }
 
 /** Shell-quote one word. */
 const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
+/** Reasoning effort, the harness's own three levels (Codex's and Hermes's flag). */
 const EFFORTS = ['low', 'medium', 'high'].map((id) => ({ id, label: id[0]!.toUpperCase() + id.slice(1) }));
-const CODEX_MODELS = ['gpt-5.5', 'gpt-5.4', 'gpt-5.5-codex', 'o3'].map((id) => ({ id, label: id }));
-const CLAUDE_MODELS = [
-  { id: 'opus', label: 'Opus' },
-  { id: 'sonnet', label: 'Sonnet' },
-  { id: 'haiku', label: 'Haiku' },
-];
+/** What the Hermes turn runs on the VM for its model list: Hermes's own catalog for the configured provider, cached by Hermes itself. */
+const HERMES_MODELS_PY = `import json, sys
+provider, models = None, []
+try:
+    from hermes_cli.config import load_config
+    from hermes_cli.models import provider_model_ids
+    provider = (load_config().get("model") or {}).get("provider")
+    models = [m for m in provider_model_ids(provider) if isinstance(m, str)]
+except Exception:
+    pass
+json.dump({"provider": provider, "models": models}, sys.stdout)`;
 
 type Json = Record<string, unknown>;
 const obj = (v: unknown): Json | undefined => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Json) : undefined);
@@ -144,6 +182,8 @@ const hermes: Runtime = {
       `{ [ -d /opt/data/skills/rowboat-spaces ] || ls -d /opt/data/skills/*/rowboat-spaces >/dev/null 2>&1; } || run hermes skills install rowboatlabs/rowboat/skills/rowboat-spaces --yes >/dev/null 2>&1 || true`,
       'cd /opt/data/workspace',
       `run hermes chat --query-file ${q(input.promptPath)} --oneshot --format stream-json -c ${q(input.session ?? 'rowboat')} --create-if-missing ${flags} > ${q(input.outPath)} 2> ${q(input.errPath)}`,
+      // The harness's own model list (2026-11-01), for the composer: after the turn, so the answer is not held up, and never fatal.
+      `printf '%s\\n' ${q(HERMES_MODELS_PY)} > /opt/data/rowboat/models.py; run timeout 30 python /opt/data/rowboat/models.py > /opt/data/rowboat/models.json.tmp 2>/dev/null && mv /opt/data/rowboat/models.json.tmp /opt/data/rowboat/models.json || true`,
     ].join('\n');
   },
   // The thread's session is its name (`-c`), kept from the first turn; the id a result reports is not read back.
@@ -164,7 +204,13 @@ const hermes: Runtime = {
     }
     return undefined;
   },
-  options: [{ type: 'select', key: 'effort', label: 'Effort', choices: EFFORTS }],
+  options: (models) => [...modelOption(models), { type: 'select', key: 'effort', label: 'Effort', choices: EFFORTS }],
+  modelsPath: '/opt/data/rowboat/models.json',
+  models(text) {
+    const doc = obj(parse(text));
+    const rows: unknown[] = Array.isArray(doc?.models) ? doc.models : [];
+    return rows.flatMap((m) => (typeof m === 'string' && m ? [{ id: m, label: m }] : []));
+  },
 };
 
 // --- Codex ----------------------------------------------------------------------------------
@@ -193,6 +239,10 @@ const codex: Runtime = {
       `OWN=""; if [ "$ROWBOAT_LLM_PROVIDER" = openai ]; then OWN='-c model_provider="openai"'; elif codex login status 2>&1 | grep -q 'ChatGPT'; then OWN='-c model_provider="openai"'; unset OPENAI_BASE_URL; echo '${SIGN_IN_MARK}chatgpt' > ${q(input.errPath)}; else echo '${SIGN_IN_MARK}none' > ${q(input.errPath)}; fi`,
       `${input.model ? '' : '[ -z "$ROWBOAT_LLM_MODEL" ] || OWN="$OWN -m $ROWBOAT_LLM_MODEL"; '}true`,
       `codex exec ${input.session ? `resume ${q(input.session)}` : ''} --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -o ${q(input.lastPath)} $OWN ${flags} -- "$PROMPT" > ${q(input.outPath)} 2>> ${q(input.errPath)}`,
+      // The harness's own model list (2026-11-01), for the composer: the catalog Codex fetched for its identity (its
+      // models_cache.json, refreshed each run: the ChatGPT set after a sign-in), or, where Codex kept none (the
+      // platform's proxy as a custom provider), what the proxy's models endpoint lists. After the turn, never fatal.
+      `cp "$CODEX_HOME/models_cache.json" /data/rowboat/models.json 2>/dev/null || { [ -n "$OPENAI_BASE_URL" ] && curl -sf -m 15 "$OPENAI_BASE_URL/models" -H "Authorization: Bearer $OPENAI_API_KEY" > /data/rowboat/models.json.tmp && mv /data/rowboat/models.json.tmp /data/rowboat/models.json; } || true`,
     ].join('\n');
   },
   read(out, last, err, exitCode) {
@@ -222,10 +272,21 @@ const codex: Runtime = {
     }
     return undefined;
   },
-  options: [
-    { type: 'select', key: 'model', label: 'Model', choices: CODEX_MODELS },
-    { type: 'select', key: 'effort', label: 'Effort', choices: EFFORTS },
-  ],
+  options: (models) => [...modelOption(models), { type: 'select', key: 'effort', label: 'Effort', choices: EFFORTS }],
+  modelsPath: '/data/rowboat/models.json',
+  // Codex's catalog (`models`: slug, display_name, visibility, priority), or a plain models endpoint (`data`: id).
+  models(text) {
+    const doc = obj(parse(text));
+    const rows: unknown[] = Array.isArray(doc?.models) ? doc.models : Array.isArray(doc?.data) ? doc.data : [];
+    const found = rows.flatMap((r) => {
+      const m = obj(r);
+      const id = str(m?.slug) ?? str(m?.id);
+      if (!m || !id || m.visibility === 'hide' || m.hidden === true) return [];
+      const priority = typeof m.priority === 'number' ? m.priority : Number.MAX_SAFE_INTEGER;
+      return [{ id, label: str(m.display_name) ?? id, priority }];
+    });
+    return found.sort((a, b) => a.priority - b.priority || a.id.localeCompare(b.id)).map(({ id, label }) => ({ id, label }));
+  },
 };
 
 // --- Claude Code ------------------------------------------------------------------------------
@@ -248,6 +309,9 @@ const claudeCode: Runtime = {
       `PROMPT="$(cat ${q(input.promptPath)})"`,
       `OWN=""; ${input.model ? '' : '[ -z "$ROWBOAT_LLM_MODEL" ] || OWN="--model $ROWBOAT_LLM_MODEL"; '}true`,
       `$CLI -p --output-format stream-json --verbose --dangerously-skip-permissions --mcp-config /data/rowboat/mcp.json $OWN ${flags} -- "$PROMPT" > ${q(input.outPath)} 2> ${q(input.errPath)}`,
+      // The harness's own model list (2026-11-01), for the composer: Claude Code lists none itself, so Anthropic's models
+      // endpoint on the owner's key, kept a day. After the turn, never fatal.
+      `f=/data/rowboat/models.json; if [ -n "$ANTHROPIC_API_KEY" ] && { [ ! -s "$f" ] || [ -n "$(find "$f" -mmin +1440 2>/dev/null)" ]; }; then curl -sf -m 15 "\${ANTHROPIC_BASE_URL:-https://api.anthropic.com}/v1/models?limit=100" -H "x-api-key: $ANTHROPIC_API_KEY" -H "anthropic-version: 2023-06-01" > "$f.tmp" && mv "$f.tmp" "$f" || true; fi`,
     ].join('\n');
   },
   read(out, _last, err, exitCode) {
@@ -266,7 +330,17 @@ const claudeCode: Runtime = {
     }
     return undefined;
   },
-  options: [{ type: 'select', key: 'model', label: 'Model', choices: CLAUDE_MODELS }],
+  options: (models) => modelOption(models),
+  modelsPath: '/data/rowboat/models.json',
+  models(text) {
+    const doc = obj(parse(text));
+    const rows: unknown[] = Array.isArray(doc?.data) ? doc.data : [];
+    return rows.flatMap((r) => {
+      const m = obj(r);
+      const id = str(m?.id);
+      return m && id ? [{ id, label: str(m.display_name) ?? id }] : [];
+    });
+  },
 };
 
 export const RUNTIMES: Record<string, Runtime> = { hermes, codex, 'claude-code': claudeCode };
