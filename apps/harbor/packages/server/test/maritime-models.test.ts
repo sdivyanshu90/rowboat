@@ -7,7 +7,15 @@ const input = { orgUrl: 'http://localhost:1', agentKey: 'rbk_x', promptPath: '/p
 const EFFORT = { type: 'select', key: 'effort', label: 'Effort', choices: [{ id: 'low', label: 'Low' }, { id: 'medium', label: 'Medium' }, { id: 'high', label: 'High' }] };
 
 describe('model lists from the harness', () => {
-  it('each turn script leaves the harness’s list where the connector reads it, after the turn', () => {
+  it('each turn script leaves the harness’s list where the connector reads it, after the turn, whether the turn passed or failed', () => {
+    for (const runtime of Object.values(RUNTIMES)) {
+      const script = runtime.command(input);
+      // The CLI runs with -e off, its exit code kept, the list left, then the script exits with the CLI's code.
+      expect(script.indexOf('set +e')).toBeGreaterThan(0);
+      expect(script.indexOf('set +e')).toBeLessThan(script.indexOf('TURN_EXIT=$?'));
+      expect(script.indexOf('TURN_EXIT=$?')).toBeLessThan(script.indexOf(runtime.modelsPath));
+      expect(script.trimEnd().endsWith('exit $TURN_EXIT')).toBe(true);
+    }
     const codex = RUNTIMES.codex!.command(input);
     expect(codex).toContain(`cp "$CODEX_HOME/models_cache.json" ${RUNTIMES.codex!.modelsPath}`);
     expect(codex).toContain('"$OPENAI_BASE_URL/models"');
