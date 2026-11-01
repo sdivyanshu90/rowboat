@@ -52,10 +52,17 @@ const gagan = api('dev-gagan');
 const prakhar = api('dev-prakhar');
 
 describe('auth', () => {
-  it('health is pre-auth', async () => {
+  it('health is pre-auth, and names the running build when the deployment set one', async () => {
     const r = await api(null).get('/v1/health');
     expect(r.status).toBe(200);
     expect(r.body.ok).toBe(true);
+    expect(r.body.build).toBeUndefined();
+    process.env.HARBOR_BUILD = 'abcdef0123456789';
+    try {
+      expect((await api(null).get('/v1/health')).body.build).toBe('abcdef012345');
+    } finally {
+      delete process.env.HARBOR_BUILD;
+    }
   });
 
   it('routes reject missing and malformed tokens', async () => {
