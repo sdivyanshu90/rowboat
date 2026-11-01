@@ -147,7 +147,12 @@ export function buildHttpApp(deps: {
     return next();
   });
 
-  app.get('/v1/health', (c) => c.json({ ok: true, org: { name: service.org.name, address: service.org.address } }));
+  // The build that is answering (2026-11-01): Render's commit for the running deploy, or whatever the deployment set
+  // as HARBOR_BUILD, so a reader can tell a merge from a deploy; absent where neither is set (local runs).
+  app.get('/v1/health', (c) => {
+    const build = (process.env.RENDER_GIT_COMMIT ?? process.env.HARBOR_BUILD ?? '').trim().slice(0, 12);
+    return c.json({ ok: true, org: { name: service.org.name, address: service.org.address }, ...(build ? { build } : {}) });
+  });
 
   // The web app's session (session.ts): the bearer in, the cookie out. The
   // token only has to be valid here; membership is checked per org on use.
