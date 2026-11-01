@@ -1127,7 +1127,11 @@ describe('AgentsDialog', () => {
         await waitFor(() => expect(toast).toHaveBeenCalledWith('Cx now runs on your ChatGPT plan', 'success'))
         expect(screen.queryByText(/trial credit/)).toBeNull()
         expect(screen.getByRole('button', { name: 'Use a key instead' })).toBeInTheDocument()
+        // On the plan, a check is still offered: it sets the VM up again (the way a newer setup reaches an agent signed in before it).
         expect(screen.queryByRole('button', { name: 'Check sign-in' })).toBeNull()
+        fireEvent.click(screen.getByRole('button', { name: 'Check again' }))
+        await waitFor(() => expect(invoke.mock.calls.filter(([c]) => c === 'spaces:checkHostingSignIn')).toHaveLength(3))
+        await waitFor(() => expect(toast).toHaveBeenCalledWith("Cx's ChatGPT sign-in is confirmed and its setup applied again", 'success'))
         // The Danger zone signs it out, after asking once more; the agent then has no model access.
         fireEvent.click(screen.getByRole('tab', { name: 'Danger zone' }))
         fireEvent.click(await screen.findByRole('button', { name: 'Sign out' }))
@@ -1161,8 +1165,8 @@ describe('AgentsDialog', () => {
         await waitFor(() => expect(invoke.mock.calls.filter(([c]) => c === 'spaces:checkHostingSignIn')).toHaveLength(2))
         await waitFor(() => expect(toast).toHaveBeenCalledWith('Cx now runs on your ChatGPT plan', 'success'))
         expect(await screen.findByText('Runs on your ChatGPT plan')).toBeInTheDocument()
-        // On the plan now: the Terminal has nothing to check.
-        expect(screen.queryByRole('button', { name: 'Check sign-in' })).toBeNull()
+        // On the plan now, the Terminal still offers the check: it sets the VM up again.
+        expect(screen.getByRole('button', { name: 'Check sign-in' })).toBeInTheDocument()
     })
 
     it('lets an admin revoke someone else’s agent’s key, but not mint one', async () => {
