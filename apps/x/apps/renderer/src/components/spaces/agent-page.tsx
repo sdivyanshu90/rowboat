@@ -224,13 +224,14 @@ export function AgentPage({ org, listing, isAdmin, onChanged }: {
     }
 
     // The Terminal is where a Codex's owner signs in to their ChatGPT plan (2026-10-30): Harbor is asked when a session ends, or on the screen's own button.
+    const onPlan = hosting?.llm?.provider === 'chatgpt'
     const signIn =
-        hosting && ready && canManage && agent.agentKind === 'codex' && hosting.llm?.provider !== 'chatgpt'
+        hosting && ready && canManage && agent.agentKind === 'codex'
             ? async () => {
                   const found = await window.ipc.invoke('spaces:checkHostingSignIn', { orgId: org.id, agentId: agent.id })
                   if (found.signedIn) {
                       hostingState.setSpend(undefined)
-                      toast(`${agent.displayName} now runs on your ChatGPT plan`, 'success')
+                      toast(onPlan ? `${agent.displayName}'s ChatGPT sign-in is confirmed and its setup applied again` : `${agent.displayName} now runs on your ChatGPT plan`, 'success')
                       await onChanged()
                   }
                   return found.signedIn
@@ -455,7 +456,8 @@ function FundingBlock({ orgId, agent, hosting, state, canManage, onChanged }: {
             const found = await window.ipc.invoke('spaces:checkHostingSignIn', { orgId, agentId: agent.id })
             if (found.signedIn) {
                 state.setSpend(undefined)
-                toast(`${agent.displayName} now runs on your ChatGPT plan`, 'success')
+                // Already on the plan: Harbor set the VM up again all the same, so a newer setup reaches it.
+                toast(plan ? `${agent.displayName}'s ChatGPT sign-in is confirmed and its setup applied again` : `${agent.displayName} now runs on your ChatGPT plan`, 'success')
                 await onChanged()
             } else {
                 toast(`No ChatGPT sign-in on ${agent.displayName}'s VM yet. Run codex login --device-auth on the Terminal tab first.`, 'error')
@@ -467,10 +469,11 @@ function FundingBlock({ orgId, agent, hosting, state, canManage, onChanged }: {
         }
     }
 
-    const checkButton = canManage && !editing && signInKind && !plan && (
+    // On the plan too (2026-11-01): a check sets the VM up again, which is the way a newer setup reaches an agent signed in before it.
+    const checkButton = canManage && !editing && signInKind && (
         <Button size="sm" variant="outline" disabled={!ready || checking} onClick={() => void checkSignIn()}>
             {checking && <Loader2 className="size-3.5 animate-spin" />}
-            Check sign-in
+            {plan ? 'Check again' : 'Check sign-in'}
         </Button>
     )
 
